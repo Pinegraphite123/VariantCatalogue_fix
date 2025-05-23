@@ -1,3 +1,5 @@
+
+
 process DEEPVARIANT {
     tag "$meta.id"
     label 'process_medium'
@@ -25,7 +27,6 @@ process DEEPVARIANT {
     script:
     def args = task.ext.args ?: ''
     prefix = task.ext.prefix ?: "${meta.id}"
-    def regions = intervals ? "--regions ${intervals}" : ""
 
     """
     /opt/deepvariant/bin/run_deepvariant \\
@@ -34,7 +35,6 @@ process DEEPVARIANT {
         --output_vcf=${prefix}.vcf.gz \\
         --output_gvcf=${prefix}.g.vcf.gz \\
         ${args} \\
-        ${regions} \\
         --num_shards=${task.cpus}
 
     cat <<-END_VERSIONS > versions.yml

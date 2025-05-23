@@ -54,8 +54,8 @@ include { Picard_QualityScoreDistribution       } from '../modules/local/Picard_
 
 include { BCFTOOLS_NORM   } from '../modules/local/bcftools/norm/main'
 include { DEEPVARIANT     } from '../modules/local/deepvariant/main'
-include { Hail_sample_QC  } from '../bin/Hail_sample_QC'
-include { Hail_variant_QC } from '../bin/Hail_variant_QC'
+include { Hail_sample_QC  } from '../modules/local/Hail_sample_QC'
+include { Hail_variant_QC } from '../modules/local/Hail_variant_QC'
 
 //
 // For the MT subworkflow
@@ -110,8 +110,20 @@ include { GLNEXUS           } from '../modules/nf-core/glnexus/main'
 include { TABIX_TABIX       } from '../modules/nf-core/tabix/tabix/main'
 include { BCFTOOLS_ANNOTATE } from '../modules/nf-core/bcftools/annotate/main'
 include { ENSEMBLVEP_VEP    } from '../modules/nf-core/ensemblvep/vep/main'
-include { BCFTOOLS_VIEW     } from '../modules/nf-core/bcftools/view'
-include { BCFTOOLS_INDEX    } from '../modules/nf-core/bcftools/index'
+
+//
+// For the MT subworkflow
+//
+
+include { BWA_INDEX as BWA_INDEX_MT; BWA_INDEX as BWA_INDEX_MT_shifted       } from '../modules/nf-core/bwa/index/main'
+include { GATK4_SAMTOFASTQ                                                   } from '../modules/nf-core/gatk4/samtofastq/main'
+include { SAMTOOLS_INDEX as SAMTOOLS_INDEX_MT; SAMTOOLS_INDEX as SAMTOOLS_INDEX_MT_shifted                         } from '../modules/nf-core/samtools/index/main'
+include { GATK4_MARKDUPLICATES as GATK4_MARKDUPLICATES_MT; GATK4_MARKDUPLICATES as GATK4_MARKDUPLICATES_MT_shifted } from '../modules/nf-core/gatk4/markduplicates/main'
+include { GATK4_MUTECT2; GATK4_MUTECT2 as GATK4_MUTECT2_shifted               } from '../modules/nf-core/gatk4/mutect2/main'
+include { TABIX_TABIX as TABIX_TABIX_MT; TABIX_TABIX as TABIX_TABIX_MT2       } from '../modules/nf-core/tabix/tabix/main'
+include { GATK4_MERGEVCFS                                                     } from '../modules/nf-core/gatk4/mergevcfs/main'
+
+
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -193,7 +205,7 @@ workflow VARIANTCATALOGUE {
 
     ch_bam = BWA_MEM.out.bam.join(SAMTOOLS_INDEX.out.bai)       // channel: [mandatory] [ val(meta), path(bam), path(bai) ]
     ch_bam.map { meta, bam, bai ->
-                        return [meta, bam, bai]
+                        return [meta, bam, bai, file(params.test_bed)]
             }
             .set { ch_deepvar_in }
 
@@ -225,22 +237,121 @@ workflow VARIANTCATALOGUE {
     BCFTOOLS_ANNOTATE (BCFTOOLS_NORM.out.vcf)
     ch_versions = ch_versions.mix(BCFTOOLS_ANNOTATE.out.versions.first())
 
-    BCFTOOLS_INDEX    (BCFTOOLS_ANNOTATE.out.vcf)
-    ch_versions = ch_versions.mix(BCFTOOLS_INDEX.out.versions.first())
-
-    BCFTOOLS_INDEX.out.csi
-        .mix(BCFTOOLS_INDEX.out.tbi)
-        .set { index_ch }
-
-    BCFTOOLS_VIEW     (BCFTOOLS_ANNOTATE.out.vcf, index_ch)
-    ch_versions = ch_versions.mix(BCFTOOLS_VIEW.out.versions.first())
-
-    Hail_sample_QC    (BCFTOOLS_VIEW.out.vcf)
+    Hail_sample_QC    (BCFTOOLS_ANNOTATE.out.vcf)
     Hail_variant_QC   (Hail_sample_QC.out.vcf_sample_filtered, Hail_sample_QC.out.filtered_sample_sex)
 //    ENSEMBLVEP_VEP    (Hail_variant_QC.out.vcf_SNV_filtered_frequ_only, params.genome, params.species, params.cache_version, params.cache_path, file(params.reference), params.vep_extra_files )
 //    ch_versions = ch_versions.mix(ENSEMBLVEP_VEP.out.versions.first())
 
 
+    //
+    // Subworkflow : MT
+    //
+
+    reference_MT = [
+        [ id:'reference_MT', single_end:true ],
+        file(params.reference_MT)
+        ]
+
+    reference_MT_index = [
+        [ id:'reference_MT_index', single_end:true ],
+        file(params.reference_MT_index)
+        ]
+
+    reference_MT_dict = [
+        [ id:'reference_MT_dict', single_end:true ],
+        file(params.reference_MT_dict)
+        ]
+
+    reference_MT_shifted = [
+        [ id:'reference_MT_shifted', single_end:true ],
+        file(params.reference_MT_shifted)
+        ]
+
+    reference_MT_shifted_index = [
+        [ id:'reference_MT_shifted_index', single_end:true ],
+        file(params.reference_MT_shifted_index)
+        ]
+
+    reference_MT_shifted_dict = [
+        [ id:'reference_MT_shifted_dict', single_end:true ],
+        file(params.reference_MT_shifted_dict)
+        ]
+
+    BWA_INDEX_MT                       (reference_MT)
+    BWA_INDEX_MT_shifted               (reference_MT_shifted)
+    GATK4_PRINTREADS                   (BWA_MEM.out.bam.join(SAMTOOLS_INDEX.out.bai), reference_MT, file(params.reference_MT_index), file(params.reference_MT_dict))
+    ch_versions = ch_versions.mix(GATK4_PRINTREADS.out.versions.first())
+
+    GATK4_SAMTOFASTQ                   (GATK4_PRINTREADS.out.bam)
+    ch_versions = ch_versions.mix(GATK4_SAMTOFASTQ.out.versions.first())
+
+    BWA_MEM_MT                         (GATK4_SAMTOFASTQ.out.fastq, BWA_INDEX_MT.out.index, true)
+    BWA_MEM_MT_shifted                 (GATK4_SAMTOFASTQ.out.fastq, BWA_INDEX_MT_shifted.out.index, true)
+    SAMTOOLS_INDEX_MT                  (BWA_MEM_MT.out.bam)
+    SAMTOOLS_INDEX_MT_shifted          (BWA_MEM_MT_shifted.out.bam)
+    GATK4_MARKDUPLICATES_MT            (BWA_MEM_MT.out.bam, [], [])
+    GATK4_MARKDUPLICATES_MT_shifted    (BWA_MEM_MT_shifted.out.bam, [], [])
+    ch_versions = ch_versions.mix(GATK4_MARKDUPLICATES_MT.out.versions.first())
+
+    PICARD_COLLECTHSMETRICS_MT         (GATK4_MARKDUPLICATES_MT.out.bam.join(GATK4_MARKDUPLICATES_MT.out.bai), reference_MT, reference_MT_index, file(params.non_control_region_interval_list))
+    PICARD_COLLECTHSMETRICS_MT_shifted (GATK4_MARKDUPLICATES_MT_shifted.out.bam.join(GATK4_MARKDUPLICATES_MT_shifted.out.bai), reference_MT_shifted, reference_MT_shifted_index, file(params.control_region_shifted_reference_interval_list))
+    ch_versions = ch_versions.mix(PICARD_COLLECTHSMETRICS_MT.out.versions.first())
+
+    ch_bam_MT = GATK4_MARKDUPLICATES_MT.out.bam.join(GATK4_MARKDUPLICATES_MT.out.bai)
+    ch_bam_MT.map { meta, bam, bai ->
+                        return [meta, bam, bai, []]
+            }
+            .set { ch_mutect2_in }
+
+    GATK4_MUTECT2          (ch_mutect2_in, file(params.reference_MT), file(params.reference_MT_index), file(params.reference_MT_dict), [], [], [], [])
+
+    ch_bam_MT_shifted = GATK4_MARKDUPLICATES_MT_shifted.out.bam.join(GATK4_MARKDUPLICATES_MT_shifted.out.bai)
+    ch_bam_MT_shifted.map { meta, bam, bai ->
+                        return [meta, bam, bai, []]
+            }
+            .set { ch_mutect2_shifted_in }
+
+    GATK4_MUTECT2_shifted  (ch_mutect2_shifted_in, file(params.reference_MT_shifted), file(params.reference_MT_shifted_index), file(params.reference_MT_shifted_dict), [], [], [], [])
+    MT_Liftover            (GATK4_MUTECT2_shifted.out.vcf.join(GATK4_MUTECT2_shifted.out.tbi), reference_MT, reference_MT_dict, BWA_INDEX_MT.out.index, file(params.ShiftBack_chain))
+    GATK4_MERGEVCFS        (MT_Liftover.out.lifted_vcf.join(GATK4_MUTECT2.out.vcf), reference_MT_dict)
+    TABIX_TABIX_MT         (GATK4_MERGEVCFS.out.vcf)
+    BCFTOOLS_NORM_MT       (GATK4_MERGEVCFS.out.vcf.join(TABIX_TABIX_MT.out.tbi), file(params.reference_MT))
+    TABIX_TABIX_MT2        (BCFTOOLS_NORM_MT.out.vcf)
+    GATK4_MERGEMUTECTSTATS (GATK4_MUTECT2.out.stats.join(GATK4_MUTECT2_shifted.out.stats))
+
+//     GATK4_FILTERMUTECTCALLS(BCFTOOLS_NORM_MT.out.vcf
+//		.join(TABIX_TABIX_MT2.out.tbi)
+//		.join(GATK4_MERGEMUTECTSTATS.out.stats), file(params.reference_MT), file(params.reference_MT_index), file(params.reference_MT_dict))
+
+//    ch_vcf_MT_filtered = GATK4_FILTERMUTECTCALLS.out.vcf
+//              .join(GATK4_FILTERMUTECTCALLS.out.tbi)
+
+    ch_vcf_MT_filtered = BCFTOOLS_NORM_MT.out.vcf
+              .join(TABIX_TABIX_MT2.out.tbi)
+
+    ch_vcf_MT_filtered.map { meta, vcf, tbi ->
+                        return [meta, vcf, tbi, []]
+            }
+            .set { ch_vcf_MT_filtered_in }
+    GATK4_LEFTALIGNANDTRIMVARIANTS(ch_vcf_MT_filtered_in, file(params.reference_MT), file(params.reference_MT_index), file(params.reference_MT_dict))
+    GATK4_VARIANTFILTRATION(GATK4_LEFTALIGNANDTRIMVARIANTS.out.vcf.join(GATK4_LEFTALIGNANDTRIMVARIANTS.out.tbi), file(params.reference_MT), file(params.reference_MT_index), file(params.reference_MT_dict))
+    HAPLOCHECK(GATK4_VARIANTFILTRATION.out.vcf)
+
+    shift_back (PICARD_COLLECTHSMETRICS_MT_shifted.out.tsv.join(PICARD_COLLECTHSMETRICS_MT.out.tsv))
+    MT_Step1_input_tsv(shift_back.out.Sample_MT_Step1_input_tsv.collect())
+    MT_Step2_participant_data(GATK4_VARIANTFILTRATION.out.sample_MT_Step2_participant_data.collect(), GATK4_VARIANTFILTRATION.out.Sample_list.collect())
+    MT_Step3_metadata_sample(MOSDEPTH.out.summary_txt, HAPLOCHECK.out.haplocheck)
+    MT_Step3_metadata(MT_Step3_metadata_sample.out.collect())
+    Hail_variant_MT_QC(MT_Step1_input_tsv.out.tsv, MT_Step2_participant_data.out.MT_Step2_participant_data_tsv, MT_Step2_participant_data.out.participants_to_subset_txt, MT_Step3_metadata.out.tsv, file(params.reference_MT), file(params.reference_MT_index), file(params.pon_predictions_table), file(params.artifact_prone_sites_bed), file(params.mitotip_predictions_table))
+
+
+
+
+
+
+  CUSTOM_DUMPSOFTWAREVERSIONS (
+        ch_versions.unique().collectFile(name: 'collated_versions.yml')
+    )
 
     //
     // MODULE: MultiQC
@@ -254,6 +365,7 @@ workflow VARIANTCATALOGUE {
     ch_multiqc_files = Channel.empty()
     ch_multiqc_files = ch_multiqc_files.mix(ch_workflow_summary.collectFile(name: 'workflow_summary_mqc.yaml'))
     ch_multiqc_files = ch_multiqc_files.mix(ch_methods_description.collectFile(name: 'methods_description_mqc.yaml'))
+    ch_multiqc_files = ch_multiqc_files.mix(CUSTOM_DUMPSOFTWAREVERSIONS.out.mqc_yml.collect())
     ch_multiqc_files = ch_multiqc_files.mix(FASTQC.out.zip.collect{it[1]}.ifEmpty([]))
     ch_multiqc_files = ch_multiqc_files.mix(MOSDEPTH.out.global_txt.collect{it[1]}.ifEmpty([]))
     ch_multiqc_files = ch_multiqc_files.mix(PICARD_COLLECTWGSMETRICS.out.metrics.collect{it[1]}.ifEmpty([]))
